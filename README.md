@@ -1,6 +1,8 @@
 # Description
 
-This repository is meant to serve as a general template for how to set up new repositories in the JogetOSS organization. 
+Form record locking form element prevents concurrent editing of the same record.
+
+Development is still in process.
 
 # Getting Help
 
