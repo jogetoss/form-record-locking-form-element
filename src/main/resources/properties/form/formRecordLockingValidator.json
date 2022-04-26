@@ -1,0 +1,14 @@
+[
+  {
+    "title": "@@form.recordLockingValidator.title@@",
+    "properties": [
+      {
+        "name": "errorMessage",
+        "label": "@@form.recordLockingValidator.errorMessage@@",
+        "type": "TextField",
+        "required": "True",
+        "value" : "Record is locked. Update is not allowed."
+      },%s
+    ]
+  }
+]

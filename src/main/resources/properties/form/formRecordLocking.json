@@ -1,0 +1,54 @@
+[
+  {
+    "title": "@@form.recordLocking.title@@",
+    "properties": [
+      {
+        "name": "id",
+        "label": "@@form.recordLocking.id@@",
+        "type": "TextField",
+        "required": "True",
+        "regex_validation": "^[a-zA-Z0-9_]+$",
+        "validation_message": "@@form.recordLocking.invalidId@@",
+        "description" : "@@form.recordLocking.id.desc@@"
+      },
+      {
+        "name" : "label",
+        "label" : "@@form.textfield.label@@",
+        "type" : "textfield",
+        "required" : "True",
+        "value" : "Record Lock"
+       },
+      {
+        "name": "lockDuration",
+        "label": "@@form.recordLocking.lockDuration@@",
+        "type": "TextField",
+        "required": "True",
+        "value": "5"
+      },
+      {
+        "name": "displayNameFormat",
+        "label": "@@form.recordLocking.displayNameFormat@@",
+        "type" : "selectbox",
+        "value" : "",
+        "required": "True",
+        "options" : [
+        {
+            "value" : "firstLast",
+            "label" : "@@form.recordLocking.displayNameFormat.firstLast@@"
+        },
+        {
+            "value" : "lastFirst",
+            "label" : "@@form.recordLocking.displayNameFormat.lastFirst@@"
+        }
+        ]
+      },
+      {
+        "name" : "validator",
+        "label" : "@@form.textfield.validator@@",
+        "type" : "elementselect",
+        "options_ajax" : "[CONTEXT_PATH]/web/property/json/getElements?classname=org.joget.apps.form.model.FormValidator",
+        "url" : "[CONTEXT_PATH]/web/property/json[APP_PATH]/getPropertyOptions"
+      },%s
+    ]
+  }
+]
