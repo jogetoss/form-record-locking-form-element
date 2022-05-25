@@ -4,6 +4,19 @@ Form record locking form element prevents concurrent editing of the same record.
 
 Development is still in process.
 
+Note: When building the plugin, if you encounter the error below: 
+
+    The POM for org.joget:wflow-enterprise-plugins:jar:7.0-SNAPSHOT is missing, no dependency information available
+
+    Failed to execute goal on project record-locking-form-element: Could not resolve dependencies for project org.joget.marketplace:record-locking-form-element:bundle:7.0.0: Could not find artifact org.joget:wflow-enterprise-plugins:jar:7.0-SNAPSHOT -> [Help 1]
+
+To obtain this jar, you will need to find it in the extracted jw.war folder. You can also find it in your joget installation /jw/WEB-INF/lib directory.
+Please run the following command to install the dependencies.
+
+    mvn install:install-file -Dfile=jw-enterprise-plugins-7.0.29.jar -DgroupId=org.joget -DartifactId=wflow-enterprise-plugins -Dversion=7.0-SNAPSHOT -Dpackaging=jar -DgeneratePom=true
+
+*Take note of the version, and make sure you change it to the same version.
+
 # Getting Help
 
 JogetOSS is a community-led team for open source software related to the [Joget](https://www.joget.org) no-code/low-code application platform.
