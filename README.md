@@ -2,6 +2,9 @@
 
 Form record locking form element prevents concurrent editing of the same record.
 
+Do see [documentation](https://dev.joget.org/community/display/marketplace/Form+Record+Locking+Form+Element).
+
+
 Development is still in process.
 
 Note: When building the plugin, if you encounter the error below: 
