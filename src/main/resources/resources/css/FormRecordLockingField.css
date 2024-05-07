@@ -1,10 +1,9 @@
-
-.formRecordLockContainer{
+.formRecordLockContainer {
     padding: 5px;
     margin: 8px 0;
 }
 
-.formRecordLockContainer i{
+.formRecordLockContainer i {
     font-size: 20px; 
     padding: 5px;
 }

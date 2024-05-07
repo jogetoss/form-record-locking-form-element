@@ -32,14 +32,14 @@
         "value" : "",
         "required": "True",
         "options" : [
-        {
-            "value" : "firstLast",
-            "label" : "@@form.recordLocking.displayNameFormat.firstLast@@"
-        },
-        {
-            "value" : "lastFirst",
-            "label" : "@@form.recordLocking.displayNameFormat.lastFirst@@"
-        }
+            {
+                "value" : "firstLast",
+                "label" : "@@form.recordLocking.displayNameFormat.firstLast@@"
+            },
+            {
+                "value" : "lastFirst",
+                "label" : "@@form.recordLocking.displayNameFormat.lastFirst@@"
+            }
         ]
       },
       {

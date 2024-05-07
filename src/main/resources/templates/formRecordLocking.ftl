@@ -1,7 +1,5 @@
 <div class="form-cell" ${elementMetaData!}>
-    <script type="text/javascript" src="${request.contextPath}/plugin/org.joget.marketplace.FormRecordLockingField/js/FormRecordLockingField.js"></script>
     <link rel="stylesheet" href="${request.contextPath}/plugin/org.joget.marketplace.FormRecordLockingField/css/FormRecordLockingField.css">
-    
     
     <#if elementMetaData != "">
         <span class="form-floating-label"><i class="fas fa-lock"></i></span>
@@ -17,7 +15,6 @@
     </#if>
 
     <#if recordLockNew??> 
-        
         <div class="panel panel-default formRecordLockContainer">
           <div class="panel-heading">
             <h4 class="panel-title"><i class="fas fa-user-lock"></i> ${element.properties.label}</h4>
@@ -28,8 +25,7 @@
         </div>
     </#if>
 
-    <#if recordLockInPlace??>
-        
+    <#if recordLockInPlace??>   
         <#if removeSaveButton??>
             <script type="text/javascript">
             $(function(){
@@ -37,7 +33,6 @@
             });
           </script>
         </#if>
-
         <div class="panel panel-default formRecordLockContainer">
           <div class="panel-heading">
             <h4 class="panel-title"><i class="fas fa-user-lock"></i> ${element.properties.label}</h4>
@@ -48,7 +43,5 @@
             <#if error??> <span class="form-error-message">${error}</span></#if>
           </div>
         </div>
-    </#if>
-    
-    
+    </#if> 
 </div>
