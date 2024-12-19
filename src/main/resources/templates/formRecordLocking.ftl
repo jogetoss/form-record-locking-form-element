@@ -44,4 +44,83 @@
           </div>
         </div>
     </#if> 
+    <#if (element.properties.enableWebsocket! == 'true')>
+        <input id="isEnabled" name="isEnabled" type="hidden" />
+    </#if>
+
+    <#--
+    <#if (element.properties.readonly! == 'true' && element.properties.readonlyLabel! == 'true') >
+        <div class="form-cell-value"><span>${value!?html}</span></div>
+        <input id="${elementParamName!}" name="${elementParamName!}" type="hidden" value="${value!?html}" />
+    <#else>    
+        <input type="text" id="messageInput" placeholder="Enter message">
+        <button id="sendButton">Send</button>
+        <button id="closeButton">Close</button><br>
+        <div id='output'></div>
+    </#if>
+    -->
+    <div id='output'></div>
+
+    <script>
+    $(document).ready(function() {
+<#--
+        $("#sendButton").off("click");
+        $("#closeButton").off("click");
+    -->
+        if ($("#isEnabled").length > 0) {
+
+            const ws = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "${request.contextPath}/web/socket/plugin/org.joget.marketplace.FormRecordLockingField");
+
+            ws.onopen = function(event) {
+                console.log(event);
+                $("#output").append('Connection opened with timeStamp: ' + event.timeStamp + '<br/>');
+            }; 
+   
+            // Tab close
+            window.addEventListener("beforeunload", () => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(jsonMsg('Tab closed'))); // Send session info
+                    ws.close(1000, 'Tab closed');
+                    console.log('WebSocket connection closed due to tab close');
+                }
+            });
+            // Add an event listener for button
+            document.querySelectorAll('.form-button').forEach( button => {
+                button.addEventListener('click', () => {
+                console.log('Button clicked');
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify(jsonMsg('Button clicked'))); // Send session info
+                        ws.close(1000, 'Button clicked');
+                        console.log('WebSocket connection closed due to  button click');
+                    }
+                });
+            });
+            ws.onmessage = function(event) {
+                $("#output").append(event.data + '<br/>');
+            }; 
+
+            ws.onclose = function(event) {
+                $("#output").append('Connection closed with timeStamp: ' + event.timeStamp + '<br/>');
+                $("#output").append('WebSocket closed<br/>');
+            }; 
+
+            ws.onError = function(event) {
+                $("#output").append("Error: " + event.data + '<br/>');
+            };  
+        
+        } 
+    });
+
+    function jsonMsg(action){
+        return {
+            recordId: '${recordId!}',
+            idColumn: '${idColumn!}',
+            tableName: '${tableName!}',
+            username: '${lockUsername!}',
+            action: action,
+            unlock: true,
+        };
+    }
+    </script>
+    <div style="clear:both;"></div>
 </div>

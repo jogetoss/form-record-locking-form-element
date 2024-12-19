@@ -1,10 +1,12 @@
 package org.joget.marketplace;
 
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TimeZone;
+import javax.websocket.Session;
 import org.joget.apps.app.lib.DatabaseUpdateTool;
 import org.joget.apps.app.model.AppDefinition;
 import org.joget.apps.app.service.AppService;
@@ -18,12 +20,14 @@ import org.joget.apps.form.service.FormUtil;
 import org.joget.commons.util.LogUtil;
 import org.joget.directory.model.User;
 import org.joget.directory.model.service.ExtDirectoryManager;
+import org.joget.plugin.base.PluginWebSocket;
 import org.joget.workflow.model.service.WorkflowUserManager;
 import org.springframework.context.ApplicationContext;
 import org.joget.workflow.model.WorkflowAssignment;
+import org.json.JSONObject;
 
-public class FormRecordLockingField extends Element implements FormBuilderPaletteElement {
-
+public class FormRecordLockingField extends Element implements FormBuilderPaletteElement,PluginWebSocket {
+    
     @Override
     public String getName() {
         return "Form Record Locking";
@@ -31,7 +35,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     @Override
     public String getVersion() {
-        return "8.0.0";
+        return "8.0.1";
     }
 
     @Override
@@ -47,6 +51,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         
         final String primaryKey = formData.getPrimaryKeyValue();
         
+        AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
+        final String tableName = appService.getFormTableName(AppUtil.getCurrentAppDefinition(), getPropertyString("formDefId"));
+        final String idColumn = getPropertyString("id");
+        
         if (primaryKey != null && !primaryKey.isEmpty()) {
             LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + primaryKey);
 
@@ -58,10 +66,16 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 //no lock is active
                 if (!currentUsername.equalsIgnoreCase("roleAnonymous")) {
                     int lockDuration = Integer.parseInt(getPropertyString("lockDuration"));
-                    setLock(primaryKey, currentUsername, lockDuration, getPropertyString("formDefId"));
+                    setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn);
 
                     dataModel.put("recordLockNew", true);
                     dataModel.put("recordLockDuration", lockDuration);
+                    if (isEnabled()){
+                        dataModel.put("recordId", primaryKey);
+                        dataModel.put("idColumn", idColumn);
+                        dataModel.put("tableName", tableName);
+                        dataModel.put("lockUsername", currentUsername);
+                    }
                 }
             } else {
                 //lock is active
@@ -84,6 +98,12 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 dataModel.put("recordLockInPlace", true);
                 dataModel.put("recordLockExpiry", getLockExpiry(value));
                 dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
+                if (isEnabled()){
+                    dataModel.put("recordId", primaryKey);
+                    dataModel.put("idColumn", idColumn);
+                    dataModel.put("tableName", tableName);
+                    dataModel.put("lockUsername", getLockUsername(value));
+                }
             }
         }
         
@@ -165,7 +185,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
     }
     
-    public void setLock(final String recordId, String username, int duration, String formDefId){
+    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn){
         Date lockUntilTime = addMinutesToDate(duration, new Date());
         
         final String value = getDateFormat().format(lockUntilTime) + ";" + username;
@@ -174,13 +194,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         WorkflowAssignment ass = new WorkflowAssignment();
         ass.setProcessId(recordId);
         
-        AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
-        final String tableName = appService.getFormTableName(AppUtil.getCurrentAppDefinition(), formDefId);
-        
         Map propertiesMap = new HashMap();
         propertiesMap.put("workflowAssignment", ass);
         propertiesMap.put("jdbcDatasource", "default");
-        propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + getPropertyString("id") + " = '" + value + "' WHERE id = '" + recordId + "'");
+        propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '" + value + "' WHERE id = '" + recordId + "'");
         new DatabaseUpdateTool().execute(propertiesMap);
         
         LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + recordId + " - Apply Lock : " + value + " - Duration (min)" + duration);
@@ -275,5 +292,71 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     private static Date addMinutesToDate(int minutes, Date beforeTime){
         final long ONE_MINUTE_IN_MILLIS = 60000; //millisecs
         return new Date(beforeTime.getTime() + (minutes * ONE_MINUTE_IN_MILLIS));
+    }
+
+    @Override
+    public void onOpen(Session session) {
+        ApplicationContext appContext = AppUtil.getApplicationContext();
+        WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
+        try {
+            session.getUserProperties().put("username", workflowUserManager.getCurrentUsername());
+            session.getBasicRemote().sendText("Connection established");
+            
+            LogUtil.debug(getClassName(), "Websocket connection established");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void onMessage(String message, Session session) {
+        try {
+            // Parse the JSON message using org.json
+            JSONObject jsonMessage = new JSONObject(message);
+            String currentUser = session.getUserProperties().get("username").toString();
+            // Extract session information
+            String action = jsonMessage.getString("action");
+            String lockUsername = jsonMessage.getString("username");
+            String primaryKey = jsonMessage.getString("recordId");
+            String idColumn = jsonMessage.getString("idColumn");
+            String tableName = jsonMessage.getString("tableName");
+            boolean unlock = jsonMessage.getBoolean("unlock");
+            
+            LogUtil.debug(getClassName(), "lockUsername:" + lockUsername);
+            LogUtil.debug(getClassName(), "action:" + action);
+            LogUtil.debug(getClassName(), "primaryKey:" + primaryKey);
+            LogUtil.debug(getClassName(), "tableName:" + tableName);
+            LogUtil.debug(getClassName(), "id:" + idColumn);  
+            
+            if (lockUsername.equals(currentUser) && unlock){
+                LogUtil.debug(getClassName(), "unlock record with id=" + primaryKey);
+                
+                WorkflowAssignment ass = new WorkflowAssignment();
+                ass.setProcessId(primaryKey);
+
+                Map propertiesMap = new HashMap();
+                propertiesMap.put("workflowAssignment", ass);
+                propertiesMap.put("jdbcDatasource", "default");
+                propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '' WHERE id = '" + primaryKey + "'");
+                new DatabaseUpdateTool().execute(propertiesMap);
+            }
+            session.getBasicRemote().sendText("Server received: " + message);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void onClose(Session session) {       
+        LogUtil.debug(getClassName(), "Websocket connection closed");
+    }
+    
+    @Override
+    public void onError(Session session, Throwable throwable) {
+        LogUtil.error(getClassName(), throwable, "");
+    }
+
+    public boolean isEnabled() {
+        return "true".equalsIgnoreCase(getPropertyString("enableWebsocket"));
     }
 }
