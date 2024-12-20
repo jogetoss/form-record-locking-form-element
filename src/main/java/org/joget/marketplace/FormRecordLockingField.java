@@ -333,8 +333,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 session.getUserProperties().put("idColumn", idColumn);
                 session.getUserProperties().put("tableName", tableName);
             }
-            if (lockUsername.equals(currentUser) && unlock){
-                unlockRecord(primaryKey, tableName, idColumn);
+            if (unlock){
+                unlockRecord(primaryKey, tableName, idColumn, currentUser, lockUsername);
             }
             session.getBasicRemote().sendText("Server received: " + message);
         } catch (IOException e) {
@@ -346,7 +346,9 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     public void onClose(Session session) {
         unlockRecord(session.getUserProperties().get("recordId").toString(), 
                 session.getUserProperties().get("tableName").toString(), 
-                session.getUserProperties().get("idColumn").toString());
+                session.getUserProperties().get("idColumn").toString(),
+                session.getUserProperties().get("username").toString(),
+                session.getUserProperties().get("lockUsername").toString());
         LogUtil.debug(getClassName(), "Websocket connection closed");
     }
     
@@ -354,7 +356,9 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     public void onError(Session session, Throwable throwable) {
         unlockRecord(session.getUserProperties().get("recordId").toString(), 
                 session.getUserProperties().get("tableName").toString(), 
-                session.getUserProperties().get("idColumn").toString());
+                session.getUserProperties().get("idColumn").toString(),
+                session.getUserProperties().get("username").toString(),
+                session.getUserProperties().get("lockUsername").toString());
         LogUtil.error(getClassName(), throwable, "");
     }
 
@@ -362,16 +366,18 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         return "true".equalsIgnoreCase(getPropertyString("enableWebsocket"));
     }
     
-    private void unlockRecord(String primaryKey, String tableName, String idColumn) {
-        LogUtil.debug(getClassName(), "unlock record with id=" + primaryKey);
-                
-        WorkflowAssignment ass = new WorkflowAssignment();
-        ass.setProcessId(primaryKey);
+    private void unlockRecord(String primaryKey, String tableName, String idColumn, String currentUser, String lockUser) {
+        if (lockUser.equals(currentUser)) {
+            LogUtil.debug(getClassName(), "unlock record with id=" + primaryKey);
 
-        Map propertiesMap = new HashMap();
-        propertiesMap.put("workflowAssignment", ass);
-        propertiesMap.put("jdbcDatasource", "default");
-        propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '' WHERE id = '" + primaryKey + "'");
-        new DatabaseUpdateTool().execute(propertiesMap);
+            WorkflowAssignment ass = new WorkflowAssignment();
+            ass.setProcessId(primaryKey);
+
+            Map propertiesMap = new HashMap();
+            propertiesMap.put("workflowAssignment", ass);
+            propertiesMap.put("jdbcDatasource", "default");
+            propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '' WHERE id = '" + primaryKey + "'");
+            new DatabaseUpdateTool().execute(propertiesMap);
+        }
     }
 }
