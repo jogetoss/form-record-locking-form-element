@@ -327,18 +327,14 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             LogUtil.debug(getClassName(), "primaryKey:" + primaryKey);
             LogUtil.debug(getClassName(), "tableName:" + tableName);
             LogUtil.debug(getClassName(), "id:" + idColumn);  
-            
+            if (!unlock){
+                session.getUserProperties().put("lockUsername", lockUsername);
+                session.getUserProperties().put("recordId", primaryKey);
+                session.getUserProperties().put("idColumn", idColumn);
+                session.getUserProperties().put("tableName", tableName);
+            }
             if (lockUsername.equals(currentUser) && unlock){
-                LogUtil.debug(getClassName(), "unlock record with id=" + primaryKey);
-                
-                WorkflowAssignment ass = new WorkflowAssignment();
-                ass.setProcessId(primaryKey);
-
-                Map propertiesMap = new HashMap();
-                propertiesMap.put("workflowAssignment", ass);
-                propertiesMap.put("jdbcDatasource", "default");
-                propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '' WHERE id = '" + primaryKey + "'");
-                new DatabaseUpdateTool().execute(propertiesMap);
+                unlockRecord(primaryKey, tableName, idColumn);
             }
             session.getBasicRemote().sendText("Server received: " + message);
         } catch (IOException e) {
@@ -347,16 +343,35 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     }
 
     @Override
-    public void onClose(Session session) {       
+    public void onClose(Session session) {
+        unlockRecord(session.getUserProperties().get("recordId").toString(), 
+                session.getUserProperties().get("tableName").toString(), 
+                session.getUserProperties().get("idColumn").toString());
         LogUtil.debug(getClassName(), "Websocket connection closed");
     }
     
     @Override
     public void onError(Session session, Throwable throwable) {
+        unlockRecord(session.getUserProperties().get("recordId").toString(), 
+                session.getUserProperties().get("tableName").toString(), 
+                session.getUserProperties().get("idColumn").toString());
         LogUtil.error(getClassName(), throwable, "");
     }
 
     public boolean isEnabled() {
         return "true".equalsIgnoreCase(getPropertyString("enableWebsocket"));
+    }
+    
+    private void unlockRecord(String primaryKey, String tableName, String idColumn) {
+        LogUtil.debug(getClassName(), "unlock record with id=" + primaryKey);
+                
+        WorkflowAssignment ass = new WorkflowAssignment();
+        ass.setProcessId(primaryKey);
+
+        Map propertiesMap = new HashMap();
+        propertiesMap.put("workflowAssignment", ass);
+        propertiesMap.put("jdbcDatasource", "default");
+        propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '' WHERE id = '" + primaryKey + "'");
+        new DatabaseUpdateTool().execute(propertiesMap);
     }
 }

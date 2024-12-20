@@ -73,13 +73,14 @@
 
             ws.onopen = function(event) {
                 console.log(event);
-                $("#output").append('Connection opened with timeStamp: ' + event.timeStamp + '<br/>');
+                ws.send(JSON.stringify(jsonMsg('Open connection', false))); // Send session info
+                console.log('Connection opened with timeStamp: ' + event.timeStamp);
             }; 
    
             // Tab close
             window.addEventListener("beforeunload", () => {
                 if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify(jsonMsg('Tab closed'))); // Send session info
+                    ws.send(JSON.stringify(jsonMsg('Tab closed', true))); // Send session info
                     ws.close(1000, 'Tab closed');
                     console.log('WebSocket connection closed due to tab close');
                 }
@@ -89,36 +90,36 @@
                 button.addEventListener('click', () => {
                 console.log('Button clicked');
                     if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify(jsonMsg('Button clicked'))); // Send session info
+                        ws.send(JSON.stringify(jsonMsg('Button clicked', true))); // Send session info
                         ws.close(1000, 'Button clicked');
                         console.log('WebSocket connection closed due to  button click');
                     }
                 });
             });
             ws.onmessage = function(event) {
-                $("#output").append(event.data + '<br/>');
+                console.log(event.data);
             }; 
 
             ws.onclose = function(event) {
-                $("#output").append('Connection closed with timeStamp: ' + event.timeStamp + '<br/>');
-                $("#output").append('WebSocket closed<br/>');
+                console.log('Connection closed with timeStamp: ' + event.timeStamp);
+                console.log('WebSocket closed');
             }; 
 
             ws.onError = function(event) {
-                $("#output").append("Error: " + event.data + '<br/>');
+                console.log("Error: " + event.data);
             };  
         
         } 
     });
 
-    function jsonMsg(action){
+    function jsonMsg(action, unlock){
         return {
             recordId: '${recordId!}',
             idColumn: '${idColumn!}',
             tableName: '${tableName!}',
             username: '${lockUsername!}',
             action: action,
-            unlock: true,
+            unlock: unlock,
         };
     }
     </script>
