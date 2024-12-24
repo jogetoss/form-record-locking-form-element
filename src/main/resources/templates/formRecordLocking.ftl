@@ -36,6 +36,8 @@
     <#if recordLockDuration??>
     <script type="text/javascript">
       $(document).ready(function() {
+        const socket = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "${request.contextPath}/web/socket/plugin/org.joget.marketplace.FormRecordLockingField?recordId=${recordId!}&formDefId=${formDefId!}&appId=" + UI.userview_app_id);
+        
         let lockExpiresAt = parseDate('${recordLockExpiry!}');
         let lockMinutesLeft = +'${recordLockDuration!}';
         let lockSecondsLeft = lockMinutesLeft * 60;
@@ -91,8 +93,6 @@
         }
 
         restartCountdown();
-
-        const socket = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "${request.contextPath}/web/socket/plugin/org.joget.marketplace.FormRecordLockingField?recordId=${recordId!}&formDefId=${formDefId!}&appId=" + UI.userview_app_id);
 
         function startCheckExpiry() {
           if (checkExpiry) {
