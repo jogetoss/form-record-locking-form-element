@@ -6,9 +6,19 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TimeZone;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import javax.websocket.CloseReason;
+import javax.websocket.CloseReason.CloseCodes;
 import javax.websocket.Session;
+
+import org.joget.apps.app.dao.FormDefinitionDao;
 import org.joget.apps.app.lib.DatabaseUpdateTool;
 import org.joget.apps.app.model.AppDefinition;
+import org.joget.apps.app.model.FormDefinition;
 import org.joget.apps.app.service.AppService;
 import org.joget.apps.app.service.AppUtil;
 import org.joget.apps.form.model.Element;
@@ -24,10 +34,18 @@ import org.joget.plugin.base.PluginWebSocket;
 import org.joget.workflow.model.service.WorkflowUserManager;
 import org.springframework.context.ApplicationContext;
 import org.joget.workflow.model.WorkflowAssignment;
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 public class FormRecordLockingField extends Element implements FormBuilderPaletteElement,PluginWebSocket {
     
+    // Store all active WebSocket sessions
+    private static final long TIMEOUT = 10000; // 10 seconds
+    private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private static final ConcurrentHashMap<Session, Long> sessionLastHeartbeatMap = new ConcurrentHashMap<>();
+    private static boolean monitorStarted = false;
+
     @Override
     public String getName() {
         return "Form Record Locking";
@@ -60,22 +78,15 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
             final String value = FormUtil.getElementPropertyValue(this, formData); //obtain lock record
             final String currentUsername = workflowUserManager.getCurrentUsername();
-            
+            final int lockDuration = Integer.parseInt(getPropertyString("lockDuration"));
             //form load
-            if (!isLockActive(value)) {
+            if (!isLockActive(value, currentUsername)) {
                 //no lock is active
                 if (!currentUsername.equalsIgnoreCase("roleAnonymous")) {
-                    int lockDuration = Integer.parseInt(getPropertyString("lockDuration"));
-                    setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn);
+                    setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn, true);
 
                     dataModel.put("recordLockNew", true);
                     dataModel.put("recordLockDuration", lockDuration);
-                    if (isEnabled()){
-                        dataModel.put("recordId", primaryKey);
-                        dataModel.put("idColumn", idColumn);
-                        dataModel.put("tableName", tableName);
-                        dataModel.put("lockUsername", currentUsername);
-                    }
                 }
             } else {
                 //lock is active
@@ -98,12 +109,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 dataModel.put("recordLockInPlace", true);
                 dataModel.put("recordLockExpiry", getLockExpiry(value));
                 dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
-                if (isEnabled()){
-                    dataModel.put("recordId", primaryKey);
-                    dataModel.put("idColumn", idColumn);
-                    dataModel.put("tableName", tableName);
-                    dataModel.put("lockUsername", getLockUsername(value));
-                }
+            }
+            if (isEnabled()){
+                dataModel.put("recordId", primaryKey);
+                dataModel.put("formDefId", getPropertyString("formDefId"));
             }
         }
         
@@ -121,6 +130,9 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     
     public String getLockExpiryDurationLeft(String value) {
         if (value != null && !value.isEmpty()) {
+            if (isEnabled() && getLockExpiry(value).isEmpty()) {
+                return getPropertyString("lockDuration") + " m";
+            }
             try {
                 Date lockDateExpiry = getDateFormat().parse(getLockExpiry(value));
                 
@@ -166,8 +178,12 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
     }
     
-    public boolean isLockActive(String value) {
+    public boolean isLockActive(String value, String currentUsername) {
         if (value != null && !value.isEmpty()) {
+            // web socket is enabled
+            if (isEnabled() && getLockExpiry(value).isEmpty()) {
+                return !getLockUsername(value).equals(currentUsername);
+            }
             try {
                 Date lockDateExpiry = getDateFormat().parse(getLockExpiry(value));
                 
@@ -185,10 +201,26 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
     }
     
-    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn){
+    /**
+     * Set the form record lock.
+     * If web socket is enabled: 
+     * a)on new lock, set the remaining lock time as lock duration
+     * b)on heartbeat undetected, start the lock countdown
+     * @param recordId
+     * @param username
+     * @param duration
+     * @param tableName
+     * @param idColumn
+     * @param recordNew
+     */
+    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn, boolean recordNew){
         Date lockUntilTime = addMinutesToDate(duration, new Date());
         
-        final String value = getDateFormat().format(lockUntilTime) + ";" + username;
+        String lockTimeStr = getDateFormat().format(lockUntilTime);
+        if (recordNew && isEnabled()){
+            lockTimeStr = "";
+        }
+        final String value = lockTimeStr + ";" + username;
         
         //TODO: update same form record
         WorkflowAssignment ass = new WorkflowAssignment();
@@ -299,85 +331,201 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         ApplicationContext appContext = AppUtil.getApplicationContext();
         WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
         try {
-            session.getUserProperties().put("username", workflowUserManager.getCurrentUsername());
             session.getBasicRemote().sendText("Connection established");
+            session.getUserProperties().put("currentUser", workflowUserManager.getCurrentUsername());
+            LogUtil.debug(getClassName(), "Websocket connection established: " + session.getId());
+            sessionLastHeartbeatMap.put(session, System.currentTimeMillis());
             
-            LogUtil.debug(getClassName(), "Websocket connection established");
+            // start heartbeat monitor (only once)
+            startHeartbeatMonitorIfNeeded();
+            
         } catch (IOException e) {
-            e.printStackTrace();
+            LogUtil.error(getClassName(), e, "Websocket connection error: onOpen");
         }
     }
 
     @Override
     public void onMessage(String message, Session session) {
         try {
-            // Parse the JSON message using org.json
-            JSONObject jsonMessage = new JSONObject(message);
-            String currentUser = session.getUserProperties().get("username").toString();
-            // Extract session information
-            String action = jsonMessage.getString("action");
-            String lockUsername = jsonMessage.getString("username");
-            String primaryKey = jsonMessage.getString("recordId");
-            String idColumn = jsonMessage.getString("idColumn");
-            String tableName = jsonMessage.getString("tableName");
-            boolean unlock = jsonMessage.getBoolean("unlock");
-            
-            LogUtil.debug(getClassName(), "lockUsername:" + lockUsername);
-            LogUtil.debug(getClassName(), "action:" + action);
-            LogUtil.debug(getClassName(), "primaryKey:" + primaryKey);
-            LogUtil.debug(getClassName(), "tableName:" + tableName);
-            LogUtil.debug(getClassName(), "id:" + idColumn);  
-            if (!unlock){
-                session.getUserProperties().put("lockUsername", lockUsername);
-                session.getUserProperties().put("recordId", primaryKey);
-                session.getUserProperties().put("idColumn", idColumn);
-                session.getUserProperties().put("tableName", tableName);
-            }
-            if (unlock){
-                unlockRecord(primaryKey, tableName, idColumn, currentUser, lockUsername);
+            switch (message) {
+                case "badump":
+                    // Update the last heartbeat timestamp
+                    sessionLastHeartbeatMap.put(session, System.currentTimeMillis());
+                    LogUtil.debug(getClassName(), "Heartbeat received:" + System.currentTimeMillis() + session.getId());
+                    break;
+//                case "idle":
+//                    LogUtil.debug(getClassName(), "Unlock record due to idle time.");
+//                    updateDatabase(session, false, true);
+//                    break;
+//                case "cancel idle":
+//                    LogUtil.debug(getClassName(), "Reset record");
+//                    updateDatabase(session, false, false);
+//                    break;
+                default:
+                    // Parse the JSON message using org.json
+                    JSONObject jsonMessage = new JSONObject(message);
+                    boolean unlock = jsonMessage.getBoolean("unlock");
+                    LogUtil.debug(getClassName(), "message:" + message);
+                    if (!unlock) {
+                        session.getUserProperties().put("recordId", jsonMessage.getString("recordId"));
+                        session.getUserProperties().put("appId", jsonMessage.getString("appId"));
+                        session.getUserProperties().put("formDefId", jsonMessage.getString("formDefId"));
+                    }
+                    else {
+                        LogUtil.debug(getClassName(), "sessionInfo:" + getSessionInfo(session));
+                        updateDatabase(session, true);
+                    }
+                    break;
             }
             session.getBasicRemote().sendText("Server received: " + message);
         } catch (IOException e) {
-            e.printStackTrace();
+            LogUtil.error(getClassName(), e, "Websocket connection error: onMessage");
+        } catch (JSONException e) {
+            LogUtil.error(getClassName(), e, "Websocket connection error: onMessage");
+        } catch (Exception e) {
+            LogUtil.error(getClassName(), e, "Websocket connection error: onMessage");
         }
     }
 
     @Override
     public void onClose(Session session) {
-        unlockRecord(session.getUserProperties().get("recordId").toString(), 
-                session.getUserProperties().get("tableName").toString(), 
-                session.getUserProperties().get("idColumn").toString(),
-                session.getUserProperties().get("username").toString(),
-                session.getUserProperties().get("lockUsername").toString());
+        sessionLastHeartbeatMap.remove(session);
         LogUtil.debug(getClassName(), "Websocket connection closed");
     }
     
     @Override
     public void onError(Session session, Throwable throwable) {
-        unlockRecord(session.getUserProperties().get("recordId").toString(), 
-                session.getUserProperties().get("tableName").toString(), 
-                session.getUserProperties().get("idColumn").toString(),
-                session.getUserProperties().get("username").toString(),
-                session.getUserProperties().get("lockUsername").toString());
         LogUtil.error(getClassName(), throwable, "");
+        sessionLastHeartbeatMap.remove(session);
+        try {
+            session.close(); // Ensure the session is closed
+        } catch (IOException e) {
+            LogUtil.error(getClassName(), e, "Websocket connection error: onError");
+        }
     }
 
     public boolean isEnabled() {
         return "true".equalsIgnoreCase(getPropertyString("enableWebsocket"));
     }
-    
-    private void unlockRecord(String primaryKey, String tableName, String idColumn, String currentUser, String lockUser) {
-        if (lockUser.equals(currentUser)) {
-            LogUtil.debug(getClassName(), "unlock record with id=" + primaryKey);
 
-            WorkflowAssignment ass = new WorkflowAssignment();
-            ass.setProcessId(primaryKey);
-
-            Map propertiesMap = new HashMap();
-            propertiesMap.put("workflowAssignment", ass);
-            propertiesMap.put("jdbcDatasource", "default");
-            propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '' WHERE id = '" + primaryKey + "'");
-            new DatabaseUpdateTool().execute(propertiesMap);
+//    private void updateDatabase(Session session, boolean unlockMode, boolean idleMode) throws JSONException, Exception {
+    private void updateDatabase(Session session, boolean unlockMode) throws JSONException, Exception {
+        String recordId = session.getUserProperties().get("recordId").toString();
+        String formDefId = session.getUserProperties().get("formDefId").toString();
+        String appId = session.getUserProperties().get("appId").toString();
+        //Load existing record
+        AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
+        AppDefinition appDef = appService.getPublishedAppDefinition(appId);
+        FormRowSet rowSet = appService.loadFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, recordId);
+        FormRow row = new FormRow();
+        if (!rowSet.isEmpty()) {
+            row = rowSet.get(0);
         }
+
+        FormDefinitionDao formDefinitionDao = (FormDefinitionDao) AppUtil.getApplicationContext().getBean("formDefinitionDao");
+        FormDefinition formDef = formDefinitionDao.loadById(formDefId, appDef);
+        Element settings = getElementByClassName(new JSONObject(formDef.getJson()), FormRecordLockingField.class.getName());
+        
+        String currentUser = session.getUserProperties().get("currentUser").toString();
+        String lockUser = getLockUsername(row.get(settings.getProperty("id")).toString());
+        int lockDuration = Integer.parseInt(settings.getPropertyString("lockDuration"));
+//        if (idleMode) {
+//            lockDuration = Integer.parseInt(settings.getPropertyString("idleTimeout"));
+//        }
+        if (lockUser.isEmpty() || lockUser.equals(currentUser)) {
+            if (!unlockMode && getLockExpiryDurationLeft(row.get(settings.getProperty("id")).toString()).isEmpty() && !currentUser.equals("roleAnonymous")) {
+                LogUtil.info(getClassName(), "Reset record lock with id=" + recordId + "for user=" + currentUser);
+                setLock(recordId, currentUser, lockDuration, formDef.getTableName(), settings.getPropertyString("id"), unlockMode);
+            } 
+            else {
+                LogUtil.info(getClassName(), "Unlock record with id=" + recordId);
+
+                row.setProperty(settings.getPropertyString("id"), "");
+                appService.storeFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, rowSet, recordId);
+            }
+        }
+    }
+
+    private Element getElementByClassName(JSONObject obj, String className) {
+        if (obj != null && className != null && !className.isEmpty()) {
+            try {
+                if (obj.has(FormUtil.PROPERTY_CLASS_NAME) &&
+                    className.equals(obj.getString(FormUtil.PROPERTY_CLASS_NAME))) {
+                    return FormUtil.parseElementFromJsonObject(obj, null);
+                }
+
+                if (!obj.isNull(FormUtil.PROPERTY_ELEMENTS)) {
+                    JSONArray elements = obj.getJSONArray(FormUtil.PROPERTY_ELEMENTS);
+                    if (elements != null && elements.length() > 0) {
+                        for (int i = 0; i < elements.length(); i++) {
+                            JSONObject childObj = elements.getJSONObject(i);
+
+                            Element child = getElementByClassName(childObj, className);
+                            if (child != null) {
+                                return child;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e) {}
+        }
+
+        return null;
+    }
+
+    private synchronized void startHeartbeatMonitorIfNeeded() {
+        if (!monitorStarted) {
+            monitorStarted = true;
+            startHeartbeatMonitor();
+        }
+    }
+    
+    private String getSessionInfo(Session session) {
+        StringBuilder sessionInfo = new StringBuilder();
+        session.getUserProperties().entrySet().forEach(entry -> {
+            sessionInfo.append(entry.getKey()).append(": ").append(entry.getValue()).append(", ");
+        });
+    
+        // Remove the last comma and space if present
+        if (sessionInfo.length() > 0) {
+            sessionInfo.setLength(sessionInfo.length() - 2);
+        }
+        return sessionInfo.toString();
+    }
+    
+    public String getIdleTime(String value) {
+        if (value != null && !value.isEmpty()) {
+            return value;
+        } else {
+            return "60"; // default value is 60 minutes
+        }
+    }
+
+    public void startHeartbeatMonitor() {
+        scheduler.scheduleAtFixedRate(() -> {
+            long now = System.currentTimeMillis();
+            for (Session session : sessionLastHeartbeatMap.keySet()) {
+                Long lastBeat = sessionLastHeartbeatMap.get(session);
+                LogUtil.debug(getClassName(), "Last heartbeat:" + lastBeat);
+                if (lastBeat == null || (now - lastBeat > TIMEOUT || session.getUserProperties() == null)) {
+                    try {
+                        updateDatabase(session, false);
+                        session.close(new CloseReason(CloseCodes.GOING_AWAY, "Client unresponsive"));
+                        LogUtil.debug(getClassName(), "Session closed due to inactivity: " + session.getId());
+                    } catch (IOException e) {
+                        LogUtil.error(getClassName(), e, "Scheduler error");
+                        monitorStarted = false;
+                    } catch (JSONException e) {
+                        LogUtil.error(getClassName(), e, "Scheduler error");
+                        monitorStarted = false;
+                    } catch (Exception e) {
+                        LogUtil.error(getClassName(), e, "Scheduler error");
+                        monitorStarted = false;
+                    }
+                }
+            }
+        }, TIMEOUT, TIMEOUT, TimeUnit.MILLISECONDS);
+        LogUtil.info(getClassName(), "Heartbeat monitor started");
     }
 }

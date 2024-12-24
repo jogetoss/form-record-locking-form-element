@@ -69,59 +69,81 @@
     -->
         if ($("#isEnabled").length > 0) {
 
+            let pingInterval = null;
             const ws = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "${request.contextPath}/web/socket/plugin/org.joget.marketplace.FormRecordLockingField");
 
             ws.onopen = function(event) {
-                console.log(event);
-                ws.send(JSON.stringify(jsonMsg('Open connection', false))); // Send session info
+                jsonMsg('Open connection', false); // Send session info
                 console.log('Connection opened with timeStamp: ' + event.timeStamp);
+                pingInterval = setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send("badump");
+                    } else {
+                        console.log("WebSocket is not open. Stopping interval.");
+                        clearInterval(pingInterval); // Stop the interval if the WebSocket is closed
+                    }
+                }, 5000); // Interval in milliseconds (5000 ms = 5 seconds)
+                console.log(pingInterval);
             }; 
    
             // Tab close
             window.addEventListener("beforeunload", () => {
                 if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify(jsonMsg('Tab closed', true))); // Send session info
-                    ws.close(1000, 'Tab closed');
+                    jsonMsg('Tab closed', true);
+                    ws.close();
                     console.log('WebSocket connection closed due to tab close');
                 }
             });
             // Add an event listener for button
             document.querySelectorAll('.form-button').forEach( button => {
                 button.addEventListener('click', () => {
-                console.log('Button clicked');
+                //console.log('Button clicked');
                     if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify(jsonMsg('Button clicked', true))); // Send session info
-                        ws.close(1000, 'Button clicked');
+                        jsonMsg('Button clicked', true);
+                        ws.close();
                         console.log('WebSocket connection closed due to  button click');
                     }
                 });
             });
+
+            //document.addEventListener("visibilitychange", () => {
+            //    if (document.visibilityState === "hidden") {
+            //        //console.log("Browser tab is out of focus");
+            //        ws.send("idle");
+            //    }
+            //    else {
+            //        //console.log("Browser tab is in focus");
+            //        ws.send("cancel idle");
+            //    }
+            //});
+
             ws.onmessage = function(event) {
                 console.log(event.data);
             }; 
 
             ws.onclose = function(event) {
                 console.log('Connection closed with timeStamp: ' + event.timeStamp);
-                console.log('WebSocket closed');
+                clearInterval(pingInterval);
             }; 
 
             ws.onError = function(event) {
                 console.log("Error: " + event.data);
+                clearInterval(pingInterval);
             };  
-        
+
+            function jsonMsg(action, unlock){
+                jsonStr = {
+                    recordId: '${recordId!}',
+                    formDefId: '${formDefId!}',
+                    appId: UI.userview_app_id,
+                    action: action,
+                    unlock: unlock,
+                };
+                ws.send(JSON.stringify(jsonStr)); // Send session info
+            }
         } 
     });
 
-    function jsonMsg(action, unlock){
-        return {
-            recordId: '${recordId!}',
-            idColumn: '${idColumn!}',
-            tableName: '${tableName!}',
-            username: '${lockUsername!}',
-            action: action,
-            unlock: unlock,
-        };
-    }
     </script>
     <div style="clear:both;"></div>
 </div>

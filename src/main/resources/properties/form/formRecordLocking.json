@@ -52,7 +52,7 @@
       %s,
       {
         "name": "enableWebsocket",
-        "label": "@@form.checkbox.enableWebsocket@@",
+        "label": "@@form.recordLocking.enableWebsocket@@",
         "type": "checkbox",
         "value": "false",
         "options": [
@@ -62,6 +62,14 @@
             }
         ]
       }
+      //{
+      //    "name": "webSocketIdleTime",
+      //    "label": "@@form.recordLocking.idleTime@@",
+      //    "type": "textfield",
+      //    "required": "false",
+      //    "value": "",
+      //    "description": "@@form.recordLocking.idleTimeDesc@@"
+      //}
     ]
   }
 ]
