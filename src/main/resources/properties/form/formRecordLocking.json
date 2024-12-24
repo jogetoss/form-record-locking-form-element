@@ -62,14 +62,6 @@
             }
         ]
       }
-      //{
-      //    "name": "webSocketIdleTime",
-      //    "label": "@@form.recordLocking.idleTime@@",
-      //    "type": "textfield",
-      //    "required": "false",
-      //    "value": "",
-      //    "description": "@@form.recordLocking.idleTimeDesc@@"
-      //}
     ]
   }
 ]

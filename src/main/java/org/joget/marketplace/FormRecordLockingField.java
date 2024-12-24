@@ -110,8 +110,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 dataModel.put("recordLockExpiry", getLockExpiry(value));
                 dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
             }
+            dataModel.put("recordId", primaryKey);
             if (isEnabled()){
-                dataModel.put("recordId", primaryKey);
                 dataModel.put("formDefId", getPropertyString("formDefId"));
             }
         }
@@ -508,7 +508,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             for (Session session : sessionLastHeartbeatMap.keySet()) {
                 Long lastBeat = sessionLastHeartbeatMap.get(session);
                 LogUtil.debug(getClassName(), "Last heartbeat:" + lastBeat);
-                if (lastBeat == null || (now - lastBeat > TIMEOUT || session.getUserProperties() == null)) {
+                if (lastBeat == null || (now - lastBeat > TIMEOUT)) {
                     try {
                         updateDatabase(session, false);
                         session.close(new CloseReason(CloseCodes.GOING_AWAY, "Client unresponsive"));

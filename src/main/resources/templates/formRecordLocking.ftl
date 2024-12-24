@@ -63,11 +63,8 @@
 
     <script>
     $(document).ready(function() {
-<#--
-        $("#sendButton").off("click");
-        $("#closeButton").off("click");
-    -->
-        if ($("#isEnabled").length > 0) {
+        let recordId = <#if recordId?has_content>'${recordId!}'<#else>""</#if>;
+        if ($("#isEnabled").length > 0 && recordId != "") {
 
             let pingInterval = null;
             const ws = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "${request.contextPath}/web/socket/plugin/org.joget.marketplace.FormRecordLockingField");
@@ -133,7 +130,7 @@
 
             function jsonMsg(action, unlock){
                 jsonStr = {
-                    recordId: '${recordId!}',
+                    recordId: recordId,
                     formDefId: '${formDefId!}',
                     appId: UI.userview_app_id,
                     action: action,
