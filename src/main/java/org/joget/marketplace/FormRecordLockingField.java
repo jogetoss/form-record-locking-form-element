@@ -21,8 +21,20 @@ import org.joget.directory.model.service.ExtDirectoryManager;
 import org.joget.workflow.model.service.WorkflowUserManager;
 import org.springframework.context.ApplicationContext;
 import org.joget.workflow.model.WorkflowAssignment;
+import org.joget.plugin.base.PluginWebSocket;
+import javax.websocket.Session;
+import java.util.List;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.joget.apps.app.model.FormDefinition;
+import org.joget.apps.app.dao.FormDefinitionDao;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-public class FormRecordLockingField extends Element implements FormBuilderPaletteElement {
+public class FormRecordLockingField extends Element implements FormBuilderPaletteElement, PluginWebSocket {
 
     @Override
     public String getName() {
@@ -43,14 +55,13 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     public String renderTemplate(FormData formData, Map dataModel) {
         ApplicationContext appContext = AppUtil.getApplicationContext();
         WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
-        ExtDirectoryManager directoryManager = (ExtDirectoryManager) appContext.getBean("directoryManager");
         
         final String primaryKey = formData.getPrimaryKeyValue();
         
         if (primaryKey != null && !primaryKey.isEmpty()) {
             LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + primaryKey);
 
-            final String value = FormUtil.getElementPropertyValue(this, formData); //obtain lock record
+            String value = FormUtil.getElementPropertyValue(this, formData); //obtain lock record
             final String currentUsername = workflowUserManager.getCurrentUsername();
             
             //form load
@@ -58,10 +69,14 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 //no lock is active
                 if (!currentUsername.equalsIgnoreCase("roleAnonymous")) {
                     int lockDuration = Integer.parseInt(getPropertyString("lockDuration"));
-                    setLock(primaryKey, currentUsername, lockDuration, getPropertyString("formDefId"));
+                    value = setLock(primaryKey, currentUsername, lockDuration, getPropertyString("formDefId"));
 
                     dataModel.put("recordLockNew", true);
                     dataModel.put("recordLockDuration", lockDuration);
+                    dataModel.put("recordLockInPlace", true);
+                    dataModel.put("recordLockExpiry", getLockExpiry(value));
+                    dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
+                    dataModel.put("recordLockUsername", getLockUserFullname(value));
                 }
             } else {
                 //lock is active
@@ -75,16 +90,14 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                     dataModel.put("removeSaveButton", true);
                 }
                 
-                User lockUser = directoryManager.getUserByUsername(getLockUsername(value));
-                String userFullname = getPropertyString("displayNameFormat").equalsIgnoreCase("firstLast") 
-                        ? lockUser.getFirstName() + " " + lockUser.getLastName()
-                        : lockUser.getLastName() + " " + lockUser.getFirstName();
-                
-                dataModel.put("recordLockUsername", userFullname);
+                dataModel.put("recordLockUsername", getLockUserFullname(value));
                 dataModel.put("recordLockInPlace", true);
                 dataModel.put("recordLockExpiry", getLockExpiry(value));
                 dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
             }
+            
+            dataModel.put("recordId", primaryKey);
+            dataModel.put("formDefId", getPropertyString("formDefId"));
         }
         
         //if lock exists
@@ -165,10 +178,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
     }
     
-    public void setLock(final String recordId, String username, int duration, String formDefId){
-        Date lockUntilTime = addMinutesToDate(duration, new Date());
-        
-        final String value = getDateFormat().format(lockUntilTime) + ";" + username;
+    public String setLock(final String recordId, String username, int duration, String formDefId){        
+        final String value = makeLockValue(recordId, username, duration);
         
         //TODO: update same form record
         WorkflowAssignment ass = new WorkflowAssignment();
@@ -184,6 +195,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         new DatabaseUpdateTool().execute(propertiesMap);
         
         LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + recordId + " - Apply Lock : " + value + " - Duration (min)" + duration);
+
+        return value;
     }
     
     private SimpleDateFormat getDateFormat() {
@@ -275,5 +288,187 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     private static Date addMinutesToDate(int minutes, Date beforeTime){
         final long ONE_MINUTE_IN_MILLIS = 60000; //millisecs
         return new Date(beforeTime.getTime() + (minutes * ONE_MINUTE_IN_MILLIS));
+    }
+
+    @Override
+    public void onOpen(Session session) {}
+
+    @Override
+    public void onMessage(String status, Session session) {
+        String lockValue = refreshLock(session);
+        JSONObject message = new JSONObject();
+        message.put("lockExpiresAt", getLockExpiry(lockValue));
+        message.put("lockSecondsLeft", durationToSeconds(getLockExpiryDurationLeft(lockValue)));
+
+        try {
+            session.getBasicRemote().sendText(message.toString());
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void onClose(Session session) {
+        unLock(session);
+
+        try {
+            session.getBasicRemote().sendText("unlocked");
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+    
+    @Override
+    public void onError(Session session, Throwable throwable) {
+        unLock(session);
+    }
+
+    public String refreshLock(Session session){
+        Map<String, List<String>> params = session.getRequestParameterMap();
+        String lockValue = null;
+
+        if (params.containsKey("appId") &&
+            params.containsKey("recordId") &&
+            params.containsKey("formDefId")) {
+            
+            String appId = params.get("appId").get(0);
+            String recordId = params.get("recordId").get(0);
+            String formDefId = params.get("formDefId").get(0);
+
+            if (!appId.isEmpty() &&
+                !recordId.isEmpty() &&
+                !formDefId.isEmpty()) {
+                lockValue = saveRecord(appId, formDefId, recordId, "lock");
+            }
+        }
+
+        return lockValue;
+    }
+
+    private void unLock(Session session){
+        Map<String, List<String>> params = session.getRequestParameterMap();
+
+        if (params.containsKey("appId") &&
+            params.containsKey("recordId") &&
+            params.containsKey("formDefId")) {
+            
+            String appId = params.get("appId").get(0);
+            String recordId = params.get("recordId").get(0);
+            String formDefId = params.get("formDefId").get(0);
+
+            if (!appId.isEmpty() &&
+                !recordId.isEmpty() &&
+                !formDefId.isEmpty()) {
+                saveRecord(appId, formDefId, recordId, null);
+            }
+        }
+    }
+
+    private String saveRecord(String appId, String formDefId, String recordId, String mode) {
+        //Load existing record
+        AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
+        AppDefinition appDef = appService.getPublishedAppDefinition(appId);
+        FormRowSet rowSet = appService.loadFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, recordId);
+        FormRow row = new FormRow();
+        if (!rowSet.isEmpty()) {
+            row = rowSet.get(0);
+        }
+        
+        String lockValue = "";
+        Element settings = getSettings(appDef, formDefId);
+        if (mode != null && mode.equals("lock")) {
+            ApplicationContext appContext = AppUtil.getApplicationContext();
+            WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
+            String username = workflowUserManager.getCurrentUsername();
+            int lockDuration = Integer.parseInt(settings.getPropertyString("lockDuration"));
+            lockValue = makeLockValue(recordId, username, lockDuration);
+        }
+
+        //Store updated record
+        row.setProperty(settings.getPropertyString("id"), lockValue);
+
+        if (rowSet.size() > 0) {
+            rowSet.set(0, row);
+        } else {
+            rowSet.add(0, row);
+        }
+
+        appService.storeFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, rowSet, recordId);
+
+        return lockValue;
+    }
+
+    private String makeLockValue(String recordId, String username, int duration){
+        Instant now = Instant.now().plusSeconds(1);
+        ZonedDateTime zonedDateTime = now.atZone(ZoneId.of("Asia/Kuala_Lumpur"));
+        Date date = Date.from(zonedDateTime.toInstant());
+        Date lockUntilTime = addMinutesToDate(duration, new Date());
+        return getDateFormat().format(lockUntilTime) + ";" + username;
+    }
+
+    private String getLockUserFullname(String value) {
+        ApplicationContext appContext = AppUtil.getApplicationContext();
+        ExtDirectoryManager directoryManager = (ExtDirectoryManager) appContext.getBean("directoryManager");
+        User lockUser = directoryManager.getUserByUsername(getLockUsername(value));
+        return getPropertyString("displayNameFormat").equalsIgnoreCase("firstLast") 
+                            ? lockUser.getFirstName() + " " + lockUser.getLastName()
+                            : lockUser.getLastName() + " " + lockUser.getFirstName();
+    }
+
+    private Element getSettings (AppDefinition appDef, String formDefId) {
+        FormDefinitionDao formDefinitionDao = (FormDefinitionDao) AppUtil.getApplicationContext().getBean("formDefinitionDao");
+        FormDefinition formDef = formDefinitionDao.loadById(formDefId, appDef);
+        return getElementByClassName(new JSONObject(formDef.getJson()), FormRecordLockingField.class.getName());
+    }
+
+    private Element getElementByClassName(JSONObject obj, String className) {
+        if (obj != null && className != null && !className.isEmpty()) {
+            try {
+                if (obj.has(FormUtil.PROPERTY_CLASS_NAME) &&
+                    className.equals(obj.getString(FormUtil.PROPERTY_CLASS_NAME))) {
+                    return FormUtil.parseElementFromJsonObject(obj, null);
+                }
+
+                if (!obj.isNull(FormUtil.PROPERTY_ELEMENTS)) {
+                    JSONArray elements = obj.getJSONArray(FormUtil.PROPERTY_ELEMENTS);
+                    if (elements != null && elements.length() > 0) {
+                        for (int i = 0; i < elements.length(); i++) {
+                            JSONObject childObj = elements.getJSONObject(i);
+
+                            Element child = getElementByClassName(childObj, className);
+                            if (child != null) {
+                                return child;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception e) {}
+        }
+
+        return null;
+    }
+    
+    private int durationToSeconds(String input) {
+        int minutes = 0;
+        int seconds = 0;
+
+        String regex = "(\\d+)\\s*m|\\s*(\\d+)\\s*s";
+
+        Pattern pattern = Pattern.compile(regex);
+        Matcher matcher = pattern.matcher(input);
+
+        while (matcher.find()) {
+            if (matcher.group(1) != null) {
+                minutes = Integer.parseInt(matcher.group(1));
+            }
+            if (matcher.group(2) != null) {
+                seconds = Integer.parseInt(matcher.group(2));
+            }
+        }
+
+        return (minutes * 60) + seconds;
     }
 }
