@@ -96,11 +96,9 @@
                 button.addEventListener('click', () => {
                 //console.log('Button clicked');
                     if (ws.readyState === WebSocket.OPEN) {
-                        setTimeout(() => {
                             jsonMsg('Button clicked', true);
                             ws.close();
                             console.log('WebSocket connection closed due to  button click');
-                        }, 2000);
                     }
                 });
             });

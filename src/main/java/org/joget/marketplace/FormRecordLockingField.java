@@ -84,7 +84,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 //no lock is active
                 if (!currentUsername.equalsIgnoreCase("roleAnonymous")) {
                     if (!isEnabled()) {
-                        setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn, true);
+                        setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn);
                     }
                     
                     dataModel.put("recordLockNew", true);
@@ -214,18 +214,20 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
      * @param duration
      * @param tableName
      * @param idColumn
-     * @param recordNew
      */
-    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn, boolean recordNew){
+    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn){
         Date lockUntilTime = addMinutesToDate(duration, new Date());
         
         String lockTimeStr = getDateFormat().format(lockUntilTime);
-        if (recordNew && isEnabled()){
-            lockTimeStr = "";
-        }
+
         final String value = lockTimeStr + ";" + username;
+       
+        updateDatabaseInWorkflow(recordId, tableName, idColumn, value);
         
-        //TODO: update same form record
+        LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + recordId + " - Apply Lock : " + value + " - Duration (min)" + duration);
+    }
+    
+    private void updateDatabaseInWorkflow(String recordId, String tableName, String idColumn, String value) {
         WorkflowAssignment ass = new WorkflowAssignment();
         ass.setProcessId(recordId);
         
@@ -234,8 +236,6 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         propertiesMap.put("jdbcDatasource", "default");
         propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '" + value + "' WHERE id = '" + recordId + "'");
         new DatabaseUpdateTool().execute(propertiesMap);
-        
-        LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + recordId + " - Apply Lock : " + value + " - Duration (min)" + duration);
     }
     
     private SimpleDateFormat getDateFormat() {
@@ -445,6 +445,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         String currentUser = session.getUserProperties().get("currentUser").toString();
         String lockUser = getLockUsername(row.get(settings.getProperty("id")).toString());
         int lockDuration = Integer.parseInt(settings.getPropertyString("lockDuration"));
+        String tableName = formDef.getTableName();
+        String idColumn = settings.getPropertyString("id");
 //        if (idleMode) {
 //            lockDuration = Integer.parseInt(settings.getPropertyString("idleTimeout"));
 //        }
@@ -453,22 +455,21 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             // heartbeat timeout: reset the timer to start countdown
             if (!unlockMode && getLockExpiryDurationLeft(row.get(settings.getProperty("id")).toString()).isEmpty() && !lockUser.isEmpty()) {
                 LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
-                setLock(recordId, currentUser, lockDuration, formDef.getTableName(), settings.getPropertyString("id"), freezeTime);
+                Date lockUntilTime = addMinutesToDate(lockDuration, new Date());
+        
+                String lockTimeStr = getDateFormat().format(lockUntilTime);
+                updateDatabaseInWorkflow(recordId, tableName, idColumn, lockTimeStr + ";" + currentUser);
             } 
             // open connection: make the timer stop countdown
             else if (!unlockMode && freezeTime) {
                 lockMessage = "freeze time ";
                 LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
-                
-                row.setProperty(settings.getPropertyString("id"), ";" + currentUser);
-                appService.storeFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, rowSet, recordId);
+                updateDatabaseInWorkflow(recordId, tableName, idColumn, ";" + currentUser);
             }
             // connection closed: unlock record
             else {
                 LogUtil.info(getClassName(), "Unlock record with id=" + recordId);
-
-                row.setProperty(settings.getPropertyString("id"), "");
-                appService.storeFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, rowSet, recordId);
+                updateDatabaseInWorkflow(recordId, tableName, idColumn, "");
             }
         }
     }
