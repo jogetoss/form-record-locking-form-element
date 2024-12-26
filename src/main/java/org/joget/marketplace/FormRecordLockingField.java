@@ -83,8 +83,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             if (!isLockActive(value, currentUsername)) {
                 //no lock is active
                 if (!currentUsername.equalsIgnoreCase("roleAnonymous")) {
-                    setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn, true);
-
+                    if (!isEnabled()) {
+                        setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn, true);
+                    }
+                    
                     dataModel.put("recordLockNew", true);
                     dataModel.put("recordLockDuration", lockDuration);
                 }
@@ -180,8 +182,9 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     
     public boolean isLockActive(String value, String currentUsername) {
         if (value != null && !value.isEmpty()) {
-            // web socket is enabled
-            if (isEnabled() && getLockExpiry(value).isEmpty()) {
+            // web socket is enabled 
+            if (isEnabled()) {
+                // reset the lock after every page load
                 return !getLockUsername(value).equals(currentUsername);
             }
             try {
@@ -370,10 +373,11 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                         session.getUserProperties().put("recordId", jsonMessage.getString("recordId"));
                         session.getUserProperties().put("appId", jsonMessage.getString("appId"));
                         session.getUserProperties().put("formDefId", jsonMessage.getString("formDefId"));
+                        updateDatabase(session, false, true);
                     }
-                    else {
+                    else if (session.isOpen()) {
                         LogUtil.debug(getClassName(), "sessionInfo:" + getSessionInfo(session));
-                        updateDatabase(session, true);
+                        updateDatabase(session, true, false);
                     }
                     break;
             }
@@ -404,12 +408,24 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
     }
 
+    /**
+     * Check if websocket is enabled.
+     * @return
+     */
     public boolean isEnabled() {
         return "true".equalsIgnoreCase(getPropertyString("enableWebsocket"));
     }
 
-//    private void updateDatabase(Session session, boolean unlockMode, boolean idleMode) throws JSONException, Exception {
-    private void updateDatabase(Session session, boolean unlockMode) throws JSONException, Exception {
+    /**
+     * Updating database to set/unset lock on form record
+     * @param session
+     * @param unlockMode
+     * @param freezeTime
+     * @throws JSONException
+     * @throws Exception
+     */
+    //    private void updateDatabase(Session session, boolean unlockMode, boolean idleMode) throws JSONException, Exception {
+    private void updateDatabase(Session session, boolean unlockMode, boolean freezeTime) throws JSONException, Exception {
         String recordId = session.getUserProperties().get("recordId").toString();
         String formDefId = session.getUserProperties().get("formDefId").toString();
         String appId = session.getUserProperties().get("appId").toString();
@@ -432,11 +448,22 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 //        if (idleMode) {
 //            lockDuration = Integer.parseInt(settings.getPropertyString("idleTimeout"));
 //        }
+        String lockMessage = lockDuration + "m ";
         if (lockUser.isEmpty() || lockUser.equals(currentUser)) {
-            if (!unlockMode && getLockExpiryDurationLeft(row.get(settings.getProperty("id")).toString()).isEmpty() && !currentUser.equals("roleAnonymous")) {
-                LogUtil.info(getClassName(), "Reset record lock with id=" + recordId + "for user=" + currentUser);
-                setLock(recordId, currentUser, lockDuration, formDef.getTableName(), settings.getPropertyString("id"), unlockMode);
+            // heartbeat timeout: reset the timer to start countdown
+            if (!unlockMode && getLockExpiryDurationLeft(row.get(settings.getProperty("id")).toString()).isEmpty() && !lockUser.isEmpty()) {
+                LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
+                setLock(recordId, currentUser, lockDuration, formDef.getTableName(), settings.getPropertyString("id"), freezeTime);
             } 
+            // open connection: make the timer stop countdown
+            else if (!unlockMode && freezeTime) {
+                lockMessage = "freeze time ";
+                LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
+                
+                row.setProperty(settings.getPropertyString("id"), ";" + currentUser);
+                appService.storeFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, rowSet, recordId);
+            }
+            // connection closed: unlock record
             else {
                 LogUtil.info(getClassName(), "Unlock record with id=" + recordId);
 
@@ -502,15 +529,18 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
     }
 
+    /**
+     * Start heartbeat monitor 
+     */
     public void startHeartbeatMonitor() {
         scheduler.scheduleAtFixedRate(() -> {
             long now = System.currentTimeMillis();
             for (Session session : sessionLastHeartbeatMap.keySet()) {
                 Long lastBeat = sessionLastHeartbeatMap.get(session);
                 LogUtil.debug(getClassName(), "Last heartbeat:" + lastBeat);
-                if (lastBeat == null || (now - lastBeat > TIMEOUT)) {
+                if (lastBeat == null || (now - lastBeat > TIMEOUT && session.isOpen())) {
                     try {
-                        updateDatabase(session, false);
+                        updateDatabase(session, false, false);
                         session.close(new CloseReason(CloseCodes.GOING_AWAY, "Client unresponsive"));
                         LogUtil.debug(getClassName(), "Session closed due to inactivity: " + session.getId());
                     } catch (IOException e) {
