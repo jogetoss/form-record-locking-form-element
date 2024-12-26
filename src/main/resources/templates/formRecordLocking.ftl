@@ -24,7 +24,7 @@
         </#if>
         <div class="panel panel-default formRecordLockContainer">
           <div class="panel-heading">
-            <h4 class="panel-title"><i class="fas fa-user-lock"></i> ${element.properties.label}</h4>
+            <h4 class="panel-title"><i class="fas fa-user-lock"></i> <span id="lockStatus">${element.properties.label}</span></h4>
           </div>
           <div class="panel-body">
             <p><i class="fas fa-user"></i> ${recordLockUsername!}</p>
@@ -33,27 +33,85 @@
           </div>
         </div>
     </#if>
-    <#if recordLockDuration??>
+    <#if recordLockInPlace??>
     <script type="text/javascript">
       $(document).ready(function() {
         const socket = new WebSocket(((window.location.protocol === "https:") ? "wss://" : "ws://") + window.location.host + "${request.contextPath}/web/socket/plugin/org.joget.marketplace.FormRecordLockingField?recordId=${recordId!}&formDefId=${formDefId!}&appId=" + UI.userview_app_id);
-        
-        let lockExpiresAt = parseDate('${recordLockExpiry!}');
-        let lockMinutesLeft = +'${recordLockDuration!}';
-        let lockSecondsLeft = lockMinutesLeft * 60;
-        let idleTimeLimit = lockSecondsLeft * 1000;
-        let countdown, checkExpiry;
+        const owner = '${recordLockOwner?c}'.toLowerCase() === 'true';
+        let lockExpiresAt, lockSecondsLeft, idleMillisLimit, lastActiveTime, isActive;
+        const urlParams = UrlUtil.getUrlParams(window.location.href);
 
-        function resetIdleTimer() {
-          lockExpiresAt = Date.now();
+        function isExpired() {
+          return new Date() >= lockExpiresAt;
         }
 
-        function startCountdown() {
-          if (countdown) {
+        function resetActivity() {
+          lastActiveTime = new Date();
+          isActive = true;
+        }
+
+        function startCheckExpiry() {
+          if (window.checkExpiry) {
             return;
           }
 
-          countdown = setInterval(() => {
+          window.checkExpiry = window.setInterval(() => {
+            const inActivePeriod = new Date() - lastActiveTime;
+            
+            if (inActivePeriod > idleMillisLimit) {
+                isActive = false;
+            }
+
+            if (isExpired() && socket.readyState === WebSocket.OPEN) {
+                if (owner) {
+                  isActive ? socket.send("") : socket.close();
+                }
+                else {
+                  socket.send("");
+                }
+            }
+          }, 1000);
+        }
+
+        function stopCheckExpiry() {
+          // if (checkExpiry) {
+            window.clearInterval(window.checkExpiry);
+            delete window.checkExpiry;
+          // }
+        }
+
+        function restartCheckExpiry() {
+          stopCheckExpiry();
+          startCheckExpiry();
+        }
+
+        function resetExpiry(expiresAt, secondsLeft, idleSecondsLimit) {
+          lockExpiresAt = new Date(expiresAt);
+          lockSecondsLeft = parseInt(secondsLeft);
+          idleMillisLimit = parseInt(idleSecondsLimit) * 1000;
+
+          if (lockExpiresAt.getTime() == 'NaN' && lockSecondsLeft == 0 && socket.readyState === WebSocket.OPEN) {
+            socket.close();
+            return;
+          }
+
+          if (!owner) {
+            lockExpiresAt.setSeconds(lockExpiresAt.getSeconds() + 5);
+            lockSecondsLeft += 5;
+          }
+
+          restartCheckExpiry();
+          resetActivity();
+        }
+
+        resetExpiry('${recordLockExpiry!}', '${lockSecondsLeft!}', '${idleSecondsLimit!}');
+
+        function startCountdown() {
+          if (window.countdown) {
+            return;
+          }
+
+          window.countdown = window.setInterval(() => {
             var minutes = Math.floor(lockSecondsLeft / 60);
             var seconds = lockSecondsLeft % 60;
             let timeLeft = '';
@@ -74,17 +132,17 @@
             lockSecondsLeft--;
 
             if (lockSecondsLeft <= 0) {
-              clearInterval(countdown);
-              $('#lockTimer').text('0s');
+              stopCountdown();
             }
           }, 1000);
         }
 
         function stopCountdown() {
-          if (countdown) {
-            clearInterval(countdown);
-            countdown = null;
-          }
+          // if (countdown) {
+            window.clearInterval(window.countdown);
+            delete window.countdown;
+            $('#lockTimer').text('0s');
+          // }
         }
         
         function restartCountdown() {
@@ -94,70 +152,43 @@
 
         restartCountdown();
 
-        function startCheckExpiry() {
-          if (checkExpiry) {
-            return;
-          }
-
-          checkExpiry = setInterval(() => {
-            let idleDuration = Date.now() - lockExpiresAt;
-
-            if (socket.readyState === WebSocket.OPEN) {
-              if (idleDuration > idleTimeLimit) {
-                socket.close();
-              } else {
-                socket.send("active");
-              }
-            }
-          }, idleTimeLimit);
-        }
-
-        function stopCheckExpiry() {
-          if (checkExpiry) {
-            clearInterval(checkExpiry);
-            checkExpiry = null;
-          }
-        }
-
-        function restartCheckExpiry() {
-          stopCheckExpiry();
-          startCheckExpiry();
-        }
-
-        restartCheckExpiry();
-
         socket.onmessage = (event) => {
           if (event.type === 'message') {
             const message = JSON.parse(event.data);
-            lockExpiresAt = parseDate(message.lockExpiresAt);
-            lockSecondsLeft = parseInt(message.lockSecondsLeft);
+            resetExpiry(message.lockExpiresAt, message.lockSecondsLeft, message.idleSecondsLimit);
             restartCountdown();
-            restartCheckExpiry();
           }
         }
 
         socket.onclose = (event) => {
           stopCheckExpiry();
           stopCountdown();
-          $('#cancel').click();
+          isActive = false;
+
+          if(owner) {
+            $('#submit').remove();
+          }
+
+          $('#lockStatus').text('Record Unlocked');
+          $('.formRecordLockContainer .fa-user-lock').removeClass('fa-user-lock').addClass('fa-lock-open');
+          $('.formRecordLockContainer .panel-body').remove();
         }
 
-        document.addEventListener('mousemove', resetIdleTimer);
-        document.addEventListener('keydown', resetIdleTimer);
-        document.addEventListener('scroll', resetIdleTimer);
-      });
+        document.addEventListener('mousemove', resetActivity);
+        document.addEventListener('keydown', resetActivity);
+        document.addEventListener('scroll', resetActivity);
+        document.addEventListener('click', resetActivity);
 
-      function parseDate(dateString) {
-          dateString = dateString.replace(" ", "T");
-          
-          const date = new Date(dateString);
+        window.addEventListener('beforeunload', function (event) {
+          stopCheckExpiry();
+          stopCountdown();
+          isActive = false;
 
-          if (isNaN(date.getTime())) {
-              return Date.now();
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.close();
           }
-          
-          return date;
-      }
+        });
+      });
     </script>
     </#if>
 </div>

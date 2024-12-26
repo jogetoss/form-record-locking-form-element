@@ -33,6 +33,8 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.servlet.http.HttpServletRequest;
+import org.joget.workflow.util.WorkflowUtil;
 
 public class FormRecordLockingField extends Element implements FormBuilderPaletteElement, PluginWebSocket {
 
@@ -55,28 +57,25 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     public String renderTemplate(FormData formData, Map dataModel) {
         ApplicationContext appContext = AppUtil.getApplicationContext();
         WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
+        HttpServletRequest request = WorkflowUtil.getHttpServletRequest();
         
         final String primaryKey = formData.getPrimaryKeyValue();
         
-        if (primaryKey != null && !primaryKey.isEmpty()) {
+        if (primaryKey != null && !primaryKey.isEmpty() && request.getParameter("_mode").equalsIgnoreCase("edit")) {
             LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + primaryKey);
 
             String value = FormUtil.getElementPropertyValue(this, formData); //obtain lock record
             final String currentUsername = workflowUserManager.getCurrentUsername();
+            int lockDuration = Integer.parseInt(getPropertyString("lockDuration"));
             
             //form load
             if (!isLockActive(value)) {
                 //no lock is active
                 if (!currentUsername.equalsIgnoreCase("roleAnonymous")) {
-                    int lockDuration = Integer.parseInt(getPropertyString("lockDuration"));
                     value = setLock(primaryKey, currentUsername, lockDuration, getPropertyString("formDefId"));
 
                     dataModel.put("recordLockNew", true);
-                    dataModel.put("recordLockDuration", lockDuration);
-                    dataModel.put("recordLockInPlace", true);
-                    dataModel.put("recordLockExpiry", getLockExpiry(value));
-                    dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
-                    dataModel.put("recordLockUsername", getLockUserFullname(value));
+                    dataModel.put("recordLockOwner", true);
                 }
             } else {
                 //lock is active
@@ -89,15 +88,17 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                     dataModel.put("recordLockOwner", false);
                     dataModel.put("removeSaveButton", true);
                 }
-                
-                dataModel.put("recordLockUsername", getLockUserFullname(value));
-                dataModel.put("recordLockInPlace", true);
-                dataModel.put("recordLockExpiry", getLockExpiry(value));
-                dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
             }
             
+            dataModel.put("recordLockDuration", lockDuration);
             dataModel.put("recordId", primaryKey);
             dataModel.put("formDefId", getPropertyString("formDefId"));
+            dataModel.put("recordLockUsername", getLockUserFullname(value));
+            dataModel.put("recordLockInPlace", true);
+            dataModel.put("recordLockExpiry", getLockExpiry(value));
+            dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
+            dataModel.put("lockSecondsLeft", durationToSeconds(getLockExpiryDurationLeft(value)));
+            dataModel.put("idleSecondsLimit", getPropertyString("idleSecondsLimit"));
         }
         
         //if lock exists
@@ -200,8 +201,9 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     }
     
     private SimpleDateFormat getDateFormat() {
-        TimeZone.setDefault(TimeZone.getTimeZone("GMT"));
-        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'");
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return sdf;
     }
     
     public FormRowSet formatData(FormData formData) {
@@ -291,14 +293,14 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     }
 
     @Override
-    public void onOpen(Session session) {}
+    public void onOpen(Session session) {
+        LogUtil.debug(getClassName(), "opened");
+    }
 
     @Override
     public void onMessage(String status, Session session) {
-        String lockValue = refreshLock(session);
-        JSONObject message = new JSONObject();
-        message.put("lockExpiresAt", getLockExpiry(lockValue));
-        message.put("lockSecondsLeft", durationToSeconds(getLockExpiryDurationLeft(lockValue)));
+        LogUtil.debug(getClassName(), "message");
+        JSONObject message = refreshLock(session);
 
         try {
             session.getBasicRemote().sendText(message.toString());
@@ -310,10 +312,11 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     @Override
     public void onClose(Session session) {
+        LogUtil.debug(getClassName(), "closed");
         unLock(session);
 
         try {
-            session.getBasicRemote().sendText("unlocked");
+            session.getBasicRemote().sendText("closed");
         }
         catch (Exception e) {
             e.printStackTrace();
@@ -325,9 +328,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         unLock(session);
     }
 
-    public String refreshLock(Session session){
+    public JSONObject refreshLock(Session session){
         Map<String, List<String>> params = session.getRequestParameterMap();
         String lockValue = null;
+        String idleSecondsLimit = null;
 
         if (params.containsKey("appId") &&
             params.containsKey("recordId") &&
@@ -340,11 +344,35 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             if (!appId.isEmpty() &&
                 !recordId.isEmpty() &&
                 !formDefId.isEmpty()) {
-                lockValue = saveRecord(appId, formDefId, recordId, "lock");
+                
+                AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
+                AppDefinition appDef = appService.getPublishedAppDefinition(appId);
+                FormRowSet rowSet = getLockedRowSet(appService, appDef, formDefId, recordId);
+                Element settings = getSettings(appDef, formDefId);
+                
+                ApplicationContext appContext = AppUtil.getApplicationContext();
+                WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
+                String username = workflowUserManager.getCurrentUsername();
+
+                lockValue = getLockedValue(rowSet, settings);
+                idleSecondsLimit = settings.getPropertyString("idleSecondsLimit");
+
+                LogUtil.debug(getClassName(), "lockValue: " + lockValue);
+
+                if (username.equals(getLockUsername(lockValue))) {
+                    if (!isLockActive(lockValue)) {
+                        lockValue = saveLockValue(appService, appDef, settings, formDefId, recordId, rowSet, username);
+                    }
+                }
             }
         }
 
-        return lockValue;
+        JSONObject message = new JSONObject();
+        message.put("lockExpiresAt", getLockExpiry(lockValue));
+        message.put("lockSecondsLeft", durationToSeconds(getLockExpiryDurationLeft(lockValue)));
+        message.put("idleSecondsLimit", idleSecondsLimit);
+
+        return message;
     }
 
     private void unLock(Session session){
@@ -361,40 +389,38 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             if (!appId.isEmpty() &&
                 !recordId.isEmpty() &&
                 !formDefId.isEmpty()) {
-                saveRecord(appId, formDefId, recordId, null);
+                
+                AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
+                AppDefinition appDef = appService.getPublishedAppDefinition(appId);
+                FormRowSet rowSet = getLockedRowSet(appService, appDef, formDefId, recordId);
+                Element settings = getSettings(appDef, formDefId);
+
+                ApplicationContext appContext = AppUtil.getApplicationContext();
+                WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
+                String username = workflowUserManager.getCurrentUsername();
+
+                String lockValue = getLockedValue(rowSet, settings);
+
+                if (username.equals(getLockUsername(lockValue))) {
+                    saveLockValue(appService, appDef, settings, formDefId, recordId, rowSet, null);
+                    LogUtil.debug(getClassName(), "unlocked");
+                }
             }
         }
     }
 
-    private String saveRecord(String appId, String formDefId, String recordId, String mode) {
-        //Load existing record
-        AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
-        AppDefinition appDef = appService.getPublishedAppDefinition(appId);
-        FormRowSet rowSet = appService.loadFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, recordId);
-        FormRow row = new FormRow();
-        if (!rowSet.isEmpty()) {
-            row = rowSet.get(0);
-        }
+    private String saveLockValue(AppService appService, AppDefinition appDef, Element settings, String formDefId, String recordId, FormRowSet rowSet, String username) {
+        FormRow row = rowSet.get(0);
         
         String lockValue = "";
-        Element settings = getSettings(appDef, formDefId);
-        if (mode != null && mode.equals("lock")) {
-            ApplicationContext appContext = AppUtil.getApplicationContext();
-            WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
-            String username = workflowUserManager.getCurrentUsername();
+        if (username != null && !username.isEmpty()) {
+            // when username is provided, it means reset the lock timer. otherwise, unlock it
             int lockDuration = Integer.parseInt(settings.getPropertyString("lockDuration"));
             lockValue = makeLockValue(recordId, username, lockDuration);
         }
 
-        //Store updated record
         row.setProperty(settings.getPropertyString("id"), lockValue);
-
-        if (rowSet.size() > 0) {
-            rowSet.set(0, row);
-        } else {
-            rowSet.add(0, row);
-        }
-
+        rowSet.set(0, row);
         appService.storeFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, rowSet, recordId);
 
         return lockValue;
@@ -402,9 +428,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     private String makeLockValue(String recordId, String username, int duration){
         Instant now = Instant.now().plusSeconds(1);
-        ZonedDateTime zonedDateTime = now.atZone(ZoneId.of("Asia/Kuala_Lumpur"));
-        Date date = Date.from(zonedDateTime.toInstant());
-        Date lockUntilTime = addMinutesToDate(duration, new Date());
+        Date lockUntilTime = addMinutesToDate(duration, Date.from(now));
         return getDateFormat().format(lockUntilTime) + ";" + username;
     }
 
@@ -470,5 +494,17 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         }
 
         return (minutes * 60) + seconds;
+    }
+
+    private FormRowSet getLockedRowSet(AppService appService, AppDefinition appDef, String formDefId, String recordId) {
+        return appService.loadFormData(appDef.getAppId(), appDef.getVersion().toString(), formDefId, recordId);
+    }
+
+    private String getLockedValue(FormRowSet rowSet, Element settings) {
+        String lockValue = "";
+        if (!rowSet.isEmpty()) {
+            lockValue = rowSet.get(0).getProperty(settings.getPropertyString("id"));
+        }
+        return lockValue;
     }
 }

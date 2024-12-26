@@ -26,6 +26,13 @@
         "value": "5"
       },
       {
+        "name": "idleSecondsLimit",
+        "label": "@@form.recordLocking.idleSecondsLimit@@",
+        "type": "TextField",
+        "required": "True",
+        "value": "300"
+      },
+      {
         "name": "displayNameFormat",
         "label": "@@form.recordLocking.displayNameFormat@@",
         "type" : "selectbox",
