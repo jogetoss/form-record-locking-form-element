@@ -91,6 +91,16 @@
                     console.log('WebSocket connection closed due to tab close');
                 }
             });
+               
+            // Browser back
+            window.addEventListener("popstate", () => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    jsonMsg('Browser back', true);
+                    ws.close();
+                    console.log('WebSocket connection closed due to browser back');
+                }
+            });
+            
             // Add an event listener for button
             document.querySelectorAll('.form-button').forEach( button => {
                 button.addEventListener('click', () => {
