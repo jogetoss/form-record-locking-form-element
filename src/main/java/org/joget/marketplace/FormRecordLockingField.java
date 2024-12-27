@@ -53,7 +53,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     @Override
     public String getVersion() {
-        return "8.0.1";
+        return "8.0.2";
     }
 
     @Override
@@ -441,9 +441,14 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         FormDefinitionDao formDefinitionDao = (FormDefinitionDao) AppUtil.getApplicationContext().getBean("formDefinitionDao");
         FormDefinition formDef = formDefinitionDao.loadById(formDefId, appDef);
         Element settings = getElementByClassName(new JSONObject(formDef.getJson()), FormRecordLockingField.class.getName());
-        
+
+        String lockUserValue = null;
+        if(row.get(settings.getProperty("id")) != null){
+            lockUserValue = row.get(settings.getProperty("id")).toString();
+        }
+
         String currentUser = session.getUserProperties().get("currentUser").toString();
-        String lockUser = getLockUsername(row.get(settings.getProperty("id")).toString());
+        String lockUser = getLockUsername(lockUserValue);
         int lockDuration = Integer.parseInt(settings.getPropertyString("lockDuration"));
         String tableName = formDef.getTableName();
         String idColumn = settings.getPropertyString("id");
@@ -453,7 +458,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         String lockMessage = lockDuration + "m ";
         if (lockUser.isEmpty() || lockUser.equals(currentUser)) {
             // heartbeat timeout: reset the timer to start countdown
-            if (!unlockMode && getLockExpiryDurationLeft(row.get(settings.getProperty("id")).toString()).isEmpty() && !lockUser.isEmpty()) {
+            if (!unlockMode && getLockExpiryDurationLeft(lockUserValue).isEmpty() && !lockUser.isEmpty()) {
                 LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
                 Date lockUntilTime = addMinutesToDate(lockDuration, new Date());
         
