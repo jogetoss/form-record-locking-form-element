@@ -37,9 +37,12 @@ import org.joget.workflow.model.WorkflowAssignment;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.sql.Connection;
+import java.sql.Statement;
+import javax.sql.DataSource;
 
-public class FormRecordLockingField extends Element implements FormBuilderPaletteElement,PluginWebSocket {
-    
+public class FormRecordLockingField extends Element implements FormBuilderPaletteElement, PluginWebSocket {
+
     // Store all active WebSocket sessions
     private static final long TIMEOUT = 10000; // 10 seconds
     private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
@@ -53,7 +56,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     @Override
     public String getVersion() {
-        return "8.0.2";
+        return "8.0.3";
     }
 
     @Override
@@ -66,13 +69,13 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         ApplicationContext appContext = AppUtil.getApplicationContext();
         WorkflowUserManager workflowUserManager = (WorkflowUserManager) appContext.getBean("workflowUserManager");
         ExtDirectoryManager directoryManager = (ExtDirectoryManager) appContext.getBean("directoryManager");
-        
+
         final String primaryKey = formData.getPrimaryKeyValue();
-        
+
         AppService appService = (AppService) AppUtil.getApplicationContext().getBean("appService");
         final String tableName = appService.getFormTableName(AppUtil.getCurrentAppDefinition(), getPropertyString("formDefId"));
         final String idColumn = getPropertyString("id");
-        
+
         if (primaryKey != null && !primaryKey.isEmpty()) {
             LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + primaryKey);
 
@@ -86,7 +89,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                     if (!isEnabled()) {
                         setLock(primaryKey, currentUsername, lockDuration, tableName, idColumn);
                     }
-                    
+
                     dataModel.put("recordLockNew", true);
                     dataModel.put("recordLockDuration", lockDuration);
                 }
@@ -101,23 +104,23 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                     dataModel.put("recordLockOwner", false);
                     dataModel.put("removeSaveButton", true);
                 }
-                
+
                 User lockUser = directoryManager.getUserByUsername(getLockUsername(value));
-                String userFullname = getPropertyString("displayNameFormat").equalsIgnoreCase("firstLast") 
+                String userFullname = getPropertyString("displayNameFormat").equalsIgnoreCase("firstLast")
                         ? lockUser.getFirstName() + " " + lockUser.getLastName()
                         : lockUser.getLastName() + " " + lockUser.getFirstName();
-                
+
                 dataModel.put("recordLockUsername", userFullname);
                 dataModel.put("recordLockInPlace", true);
                 dataModel.put("recordLockExpiry", getLockExpiry(value));
                 dataModel.put("recordLockDurationLeft", getLockExpiryDurationLeft(value));
             }
             dataModel.put("recordId", primaryKey);
-            if (isEnabled()){
+            if (isEnabled()) {
                 dataModel.put("formDefId", getPropertyString("formDefId"));
             }
         }
-        
+
         //if lock exists
         //  prevent editing
         //else
@@ -129,7 +132,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
         return FormUtil.generateElementHtml(this, formData, "formRecordLocking.ftl", dataModel);
     }
-    
+
     public String getLockExpiryDurationLeft(String value) {
         if (value != null && !value.isEmpty()) {
             if (isEnabled() && getLockExpiry(value).isEmpty()) {
@@ -137,15 +140,15 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             }
             try {
                 Date lockDateExpiry = getDateFormat().parse(getLockExpiry(value));
-                
+
                 long diff = lockDateExpiry.getTime() - (new Date()).getTime();
                 long diffSeconds = diff / 1000 % 60;
                 long diffMinutes = diff / (60 * 1000) % 60;
-                
-                return (diffMinutes > 0) 
+
+                return (diffMinutes > 0)
                         ? diffMinutes + " m " + diffSeconds + " s"
                         : diffSeconds + " s";
-            } catch(Exception ex) {
+            } catch (Exception ex) {
                 //unable to determine, assume no lock is active, return false
                 return "";
             }
@@ -153,12 +156,12 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             return ""; //no lock is in place
         }
     }
-    
+
     public String getLockExpiry(String value) {
         if (value != null && !value.isEmpty()) {
             try {
                 return value.split(";")[0]; //timestamp
-            } catch(Exception ex) {
+            } catch (Exception ex) {
                 //unable to determine, assume no lock is active, return false
                 return "";
             }
@@ -166,12 +169,12 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             return ""; //no lock is in place
         }
     }
-    
+
     public String getLockUsername(String value) {
         if (value != null && !value.isEmpty()) {
             try {
                 return value.split(";")[1]; //username
-            } catch(Exception ex) {
+            } catch (Exception ex) {
                 //unable to determine, assume no lock is active, return false
                 return "";
             }
@@ -179,7 +182,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             return ""; //no lock is in place
         }
     }
-    
+
     public boolean isLockActive(String value, String currentUsername) {
         if (value != null && !value.isEmpty()) {
             // web socket is enabled 
@@ -189,12 +192,12 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             }
             try {
                 Date lockDateExpiry = getDateFormat().parse(getLockExpiry(value));
-                
+
                 boolean lockDateExpiryActive = lockDateExpiry.after(new Date());
                 LogUtil.debug(getClassName(), "FormRecordLockingField: Lock State Active : " + lockDateExpiryActive);
 
                 return lockDateExpiryActive;
-            } catch(Exception ex) {
+            } catch (Exception ex) {
                 //unable to determine, assume no lock is active, return false
                 LogUtil.debug(getClassName(), "FormRecordLockingField: Lock State Active : None Found");
                 return false;
@@ -203,46 +206,92 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             return false; //no lock is in place
         }
     }
-    
+
     /**
-     * Set the form record lock.
-     * If web socket is enabled: 
-     * a)on new lock, set the remaining lock time as lock duration
-     * b)on heartbeat undetected, start the lock countdown
+     * Set the form record lock. If web socket is enabled: a)on new lock, set
+     * the remaining lock time as lock duration b)on heartbeat undetected, start
+     * the lock countdown
+     *
      * @param recordId
      * @param username
      * @param duration
      * @param tableName
      * @param idColumn
      */
-    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn){
+    public void setLock(final String recordId, String username, int duration, String tableName, String idColumn) {
         Date lockUntilTime = addMinutesToDate(duration, new Date());
-        
+
         String lockTimeStr = getDateFormat().format(lockUntilTime);
 
         final String value = lockTimeStr + ";" + username;
-       
+
         updateDatabaseInWorkflow(recordId, tableName, idColumn, value);
-        
+
         LogUtil.debug(getClassName(), "FormRecordLockingField: Record - " + recordId + " - Apply Lock : " + value + " - Duration (min)" + duration);
     }
-    
-    private void updateDatabaseInWorkflow(String recordId, String tableName, String idColumn, String value) {
-        WorkflowAssignment ass = new WorkflowAssignment();
-        ass.setProcessId(recordId);
-        
-        Map propertiesMap = new HashMap();
-        propertiesMap.put("workflowAssignment", ass);
-        propertiesMap.put("jdbcDatasource", "default");
-        propertiesMap.put("query", "UPDATE app_fd_" + tableName + " SET c_" + idColumn + " = '" + value + "' WHERE id = '" + recordId + "'");
-        new DatabaseUpdateTool().execute(propertiesMap);
+
+    private void updateDatabaseInWorkflow(String recordId,
+            String tableName,
+            String idColumn,
+            String value) {
+
+        String rawSql = "UPDATE app_fd_" + tableName
+                + " SET c_" + idColumn + " = '" + value + "'"
+                + " WHERE id = '" + recordId + "'";
+
+        WorkflowAssignment wfAssignment = new WorkflowAssignment();
+        wfAssignment.setProcessId(recordId);  // dummy, just needs non-null
+
+        String driver = org.joget.commons.util.DynamicDataSourceManager
+                .getProperty("workflowDriver");
+
+        Map<String, String> replace = new HashMap<>();
+        if ("com.mysql.jdbc.Driver".equalsIgnoreCase(driver)) {
+            replace.put("\\\\", "\\\\");
+            replace.put("'", "\\'");
+        } else {
+            replace.put("'", "''");
+        }
+
+        String processedSql = org.joget.workflow.util.WorkflowUtil
+                .processVariable(rawSql, null, wfAssignment, "regex", replace);
+
+        execSql(processedSql);
     }
-    
+
     private SimpleDateFormat getDateFormat() {
         TimeZone.setDefault(TimeZone.getTimeZone("GMT"));
         return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     }
-    
+
+    private void execSql(String sql) {
+        DataSource ds = null;
+        Connection conn = null;
+        Statement stmt = null;
+        try {
+            ds = (DataSource) AppUtil.getApplicationContext().getBean("setupDataSource");
+            conn = ds.getConnection();
+            stmt = conn.createStatement();
+            stmt.executeUpdate(sql);
+            LogUtil.info(getClassName(), "SQL executed: " + sql);
+        } catch (Exception ex) {
+            LogUtil.error(getClassName(), ex, "SQL error");
+        } finally {
+            try {
+                if (stmt != null) {
+                    stmt.close();
+                }
+            } catch (Exception ignore) {
+            }
+            try {
+                if (conn != null) {
+                    conn.close();
+                }
+            } catch (Exception ignore) {
+            }
+        }
+    }
+
     public FormRowSet formatData(FormData formData) {
         //form save
         String id = getPropertyString(FormUtil.PROPERTY_ID);
@@ -285,9 +334,9 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         } else {
             formDefField = "{name:'formDefId',label:'@@form.defaultformoptionbinder.formId@@',type:'textfield',required : 'True'}";
         }
-        
+
         return AppUtil.readPluginResource(getClass().getName(), "/properties/form/formRecordLocking.json", new Object[]{formDefField}, true, "messages/form/formRecordLocking");
-        
+
         /*
         TODO: how to hardcode a validator?
         
@@ -299,7 +348,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                 "properties" : {"message" : "someone is using it now"}
             }
         },        
-        */
+         */
     }
 
     @Override
@@ -316,15 +365,15 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     public String getFormBuilderIcon() {
         return "<i class=\"fas fa-lock\"></i>";
     }
-    
+
     /*
     *  Convenience method to add a specified number of minutes to a Date object
     *  From: http://stackoverflow.com/questions/9043981/how-to-add-minutes-to-my-date
     *  @param  minutes  The number of minutes to add
     *  @param  beforeTime  The time that will have minutes added to it
     *  @return  A date object with the specified number of minutes added to it 
-    */
-    private static Date addMinutesToDate(int minutes, Date beforeTime){
+     */
+    private static Date addMinutesToDate(int minutes, Date beforeTime) {
         final long ONE_MINUTE_IN_MILLIS = 60000; //millisecs
         return new Date(beforeTime.getTime() + (minutes * ONE_MINUTE_IN_MILLIS));
     }
@@ -338,10 +387,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             session.getUserProperties().put("currentUser", workflowUserManager.getCurrentUsername());
             LogUtil.debug(getClassName(), "Websocket connection established: " + session.getId());
             sessionLastHeartbeatMap.put(session, System.currentTimeMillis());
-            
+
             // start heartbeat monitor (only once)
             startHeartbeatMonitorIfNeeded();
-            
+
         } catch (IOException e) {
             LogUtil.error(getClassName(), e, "Websocket connection error: onOpen");
         }
@@ -374,8 +423,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                         session.getUserProperties().put("appId", jsonMessage.getString("appId"));
                         session.getUserProperties().put("formDefId", jsonMessage.getString("formDefId"));
                         updateDatabase(session, false, true);
-                    }
-                    else if (session.isOpen()) {
+                    } else if (session.isOpen()) {
                         LogUtil.debug(getClassName(), "sessionInfo:" + getSessionInfo(session));
                         updateDatabase(session, true, false);
                     }
@@ -396,7 +444,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         sessionLastHeartbeatMap.remove(session);
         LogUtil.debug(getClassName(), "Websocket connection closed");
     }
-    
+
     @Override
     public void onError(Session session, Throwable throwable) {
         LogUtil.error(getClassName(), throwable, "");
@@ -410,6 +458,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     /**
      * Check if websocket is enabled.
+     *
      * @return
      */
     public boolean isEnabled() {
@@ -418,6 +467,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     /**
      * Updating database to set/unset lock on form record
+     *
      * @param session
      * @param unlockMode
      * @param freezeTime
@@ -443,7 +493,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         Element settings = getElementByClassName(new JSONObject(formDef.getJson()), FormRecordLockingField.class.getName());
 
         String lockUserValue = null;
-        if(row.get(settings.getProperty("id")) != null){
+        if (row.get(settings.getProperty("id")) != null) {
             lockUserValue = row.get(settings.getProperty("id")).toString();
         }
 
@@ -461,17 +511,15 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             if (!unlockMode && getLockExpiryDurationLeft(lockUserValue).isEmpty() && !lockUser.isEmpty()) {
                 LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
                 Date lockUntilTime = addMinutesToDate(lockDuration, new Date());
-        
+
                 String lockTimeStr = getDateFormat().format(lockUntilTime);
                 updateDatabaseInWorkflow(recordId, tableName, idColumn, lockTimeStr + ";" + currentUser);
-            } 
-            // open connection: make the timer stop countdown
+            } // open connection: make the timer stop countdown
             else if (!unlockMode && freezeTime) {
                 lockMessage = "freeze time ";
                 LogUtil.info(getClassName(), "Set record lock with id=" + recordId + "to " + lockMessage + "for user=" + currentUser);
                 updateDatabaseInWorkflow(recordId, tableName, idColumn, ";" + currentUser);
-            }
-            // connection closed: unlock record
+            } // connection closed: unlock record
             else {
                 LogUtil.info(getClassName(), "Unlock record with id=" + recordId);
                 updateDatabaseInWorkflow(recordId, tableName, idColumn, "");
@@ -482,8 +530,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     private Element getElementByClassName(JSONObject obj, String className) {
         if (obj != null && className != null && !className.isEmpty()) {
             try {
-                if (obj.has(FormUtil.PROPERTY_CLASS_NAME) &&
-                    className.equals(obj.getString(FormUtil.PROPERTY_CLASS_NAME))) {
+                if (obj.has(FormUtil.PROPERTY_CLASS_NAME)
+                        && className.equals(obj.getString(FormUtil.PROPERTY_CLASS_NAME))) {
                     return FormUtil.parseElementFromJsonObject(obj, null);
                 }
 
@@ -500,8 +548,8 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
                         }
                     }
                 }
+            } catch (Exception e) {
             }
-            catch (Exception e) {}
         }
 
         return null;
@@ -513,20 +561,20 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
             startHeartbeatMonitor();
         }
     }
-    
+
     private String getSessionInfo(Session session) {
         StringBuilder sessionInfo = new StringBuilder();
         session.getUserProperties().entrySet().forEach(entry -> {
             sessionInfo.append(entry.getKey()).append(": ").append(entry.getValue()).append(", ");
         });
-    
+
         // Remove the last comma and space if present
         if (sessionInfo.length() > 0) {
             sessionInfo.setLength(sessionInfo.length() - 2);
         }
         return sessionInfo.toString();
     }
-    
+
     public String getIdleTime(String value) {
         if (value != null && !value.isEmpty()) {
             return value;
@@ -536,7 +584,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
     }
 
     /**
-     * Start heartbeat monitor 
+     * Start heartbeat monitor
      */
     public void startHeartbeatMonitor() {
         scheduler.scheduleAtFixedRate(() -> {

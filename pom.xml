@@ -4,7 +4,7 @@
     <groupId>org.joget.marketplace</groupId>
     <artifactId>record-locking-form-element</artifactId>
     <packaging>bundle</packaging>
-    <version>8.0.2</version>
+    <version>8.0.3</version>
     <name>record-locking-form-element</name>
     <url>https://www.joget.org</url>
     <properties>

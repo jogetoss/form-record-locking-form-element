@@ -61,6 +61,18 @@
                 "label": ""
             }
         ]
+      },
+       {
+        "name": "disablePageNavigation",
+        "label": "Disable page navigation when record is locked",
+        "type": "checkbox",
+        "value": "false",
+        "options": [
+            {
+                "value": "true",
+                "label": ""
+            }
+        ]
       }
     ]
   }
