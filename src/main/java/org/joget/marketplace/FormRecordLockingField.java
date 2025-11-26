@@ -56,7 +56,7 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
 
     @Override
     public String getVersion() {
-        return "8.0.3";
+        return "8.0.4";
     }
 
     @Override
@@ -259,9 +259,10 @@ public class FormRecordLockingField extends Element implements FormBuilderPalett
         execSql(processedSql);
     }
 
-    private SimpleDateFormat getDateFormat() {
-        TimeZone.setDefault(TimeZone.getTimeZone("GMT"));
-        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+   private SimpleDateFormat getDateFormat() {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC")); 
+        return sdf;
     }
 
     private void execSql(String sql) {

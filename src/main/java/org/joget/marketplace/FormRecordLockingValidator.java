@@ -28,7 +28,7 @@ public class FormRecordLockingValidator extends FormValidator {
 
     @Override
     public String getVersion() {
-        return "8.0.2";
+        return "8.0.4";
     }
 
     @Override
